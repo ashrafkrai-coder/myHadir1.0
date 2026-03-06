@@ -542,6 +542,26 @@
 
     .nav-btn.active { color: var(--brand); }
 
+    .debug-panel {
+      margin-top: 10px;
+      padding: 12px 14px;
+      border: 1px dashed rgba(120, 184, 255, 0.34);
+      border-radius: 14px;
+      background: rgba(7, 20, 39, 0.72);
+      color: #cfe3ff;
+      font-size: 0.84rem;
+      line-height: 1.5;
+    }
+
+    .debug-panel strong {
+      color: #ffffff;
+    }
+
+    .debug-panel code {
+      word-break: break-all;
+      color: #9bd0ff;
+    }
+
     @media (min-width: 768px) {
       body { padding-bottom: 24px; }
       .app-logo { width: clamp(50px, 4.2vw, 62px); }
@@ -657,6 +677,9 @@
           <button id="btnPrint" class="btn-ghost" type="button">Cetak</button>
         </div>
       </div>
+      <div id="debugPanel" class="debug-panel">
+        <div><strong>Debug:</strong> menunggu percubaan fetch pertama.</div>
+      </div>
     </section>
 
     <section id="manualSection" class="surface manual-wrap hidden" aria-label="Input manual kehadiran">
@@ -740,7 +763,7 @@
   </nav>
 
   <script>
-    const SCRIPT_URL = "https://script.google.com/a/macros/moe-dl.edu.my/s/AKfycbwNZgBGEnwwjUlpQRWhVQU-HQ5tC_r0dqirAiqi-piLq3WdXfWqJAyxdj3iN6-bMT9-/exec";
+    const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz-iXayYiVny_-bW4HEuPquQ-6x64M9ZT_kCM3jARi34vftiAFsUsXI2QJTVNGuNw/exec";
     const GURU_PASSWORD = 'myHadir1234';
     const CACHE_KEY = 'myhadir_cache_v2';
 
@@ -782,6 +805,7 @@
       filterKelas: document.getElementById('filterKelas'),
       btnRefresh: document.getElementById('btnRefresh'),
       metaData: document.getElementById('metaData'),
+      debugPanel: document.getElementById('debugPanel'),
       rowCount: document.getElementById('rowCount'),
       tableBody: document.getElementById('tableBody'),
       toastWrap: document.getElementById('toastWrap'),
@@ -865,6 +889,7 @@
       const payload = {
         action: 'manual',
         sumber: 'manual_guru',
+        password,
         tarikh: tarikhApi,
         nama,
         kelas,
@@ -880,6 +905,10 @@
           redirect: 'follow'
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const result = await bacaPayloadApi(res);
+        if (!result?.success) {
+          throw new Error(result?.message || 'Apps Script gagal simpan rekod manual.');
+        }
         toast('Kehadiran manual berjaya disimpan.', 'ok');
       } catch (_) {
         toast('Rekod lokal disimpan. Semak Apps Script jika perlu.', 'warn');
@@ -930,35 +959,133 @@
       }, 2200);
     }
 
+    function setDebugInfo(info = {}) {
+      const rows = [
+        `<div><strong>Tarikh filter:</strong> ${info.tarikhIso || '-'}</div>`,
+        `<div><strong>Tarikh API:</strong> ${info.tarikhApi || '-'}</div>`,
+        `<div><strong>URL API:</strong> <code>${info.url || SCRIPT_URL}</code></div>`,
+        `<div><strong>Status:</strong> ${info.status || '-'}</div>`,
+        `<div><strong>HTTP:</strong> ${info.http || '-'}</div>`,
+        `<div><strong>Rekod diterima:</strong> ${info.rows ?? '-'}</div>`,
+        `<div><strong>Ralat:</strong> ${info.error || '-'}</div>`
+      ];
+      el.debugPanel.innerHTML = rows.join('');
+    }
+
+    function bacaMedan(item, candidates = []) {
+      for (const key of candidates) {
+        if (item[key] !== undefined && item[key] !== null && String(item[key]).trim() !== '') {
+          return String(item[key]).trim();
+        }
+      }
+
+      const lowerCandidates = candidates.map(k => String(k).toLowerCase());
+      for (const [key, value] of Object.entries(item || {})) {
+        const normalizedKey = String(key).trim().toLowerCase();
+        if (lowerCandidates.includes(normalizedKey) && value !== undefined && value !== null && String(value).trim() !== '') {
+          return String(value).trim();
+        }
+      }
+
+      return '';
+    }
+
+    function bacaStatusMentah(item) {
+      return bacaMedan(item, [
+        'Status',
+        'status',
+        'Kehadiran',
+        'kehadiran',
+        'Status Kehadiran',
+        'status kehadiran',
+        'Kehadiran Murid',
+        'kehadiran murid'
+      ]);
+    }
+
     function normalStatus(val) {
-      const s = String(val || '').toLowerCase();
-      if (s.includes('tidak') || s.includes('absen') || s.includes('ponteng') || s.includes('x hadir')) return 'Tidak Hadir';
+      const s = String(val || '').trim().toLowerCase();
+      if (!s) return 'Hadir';
+      if (s === 'h' || s === 'hadir' || s === 'present' || s === '1' || s === 'true' || s === 'ya') return 'Hadir';
+      if (s === 'th' || s === 'tidak hadir' || s === 'absen' || s === 'ponteng' || s === 'x hadir' || s === '0' || s === 'false') return 'Tidak Hadir';
+      if (/(^|[^a-z])hadir([^a-z]|$)/.test(s) || s.includes('present')) return 'Hadir';
+      if (s.includes('tidak hadir') || s.includes('x hadir') || s.includes('absen') || s.includes('ponteng')) return 'Tidak Hadir';
       return 'Hadir';
     }
 
     function adaImbasanKad(rows) {
       return rows.some(item => {
-        const s = String(item.Status || item.status || '').toLowerCase().trim();
+        const s = bacaStatusMentah(item).toLowerCase().trim();
         if (!s) return false;
-        if (s.includes('tidak') || s.includes('absen') || s.includes('ponteng') || s.includes('x hadir')) return false;
-        return s.includes('hadir') || s.includes('present') || s === 'h';
+        return normalStatus(s) === 'Hadir';
       });
     }
 
     function bacaKelas(item) {
-      return String(item.Kelas || item.kelas || item.Nama_Kelas || item['Nama Kelas'] || 'Tiada Kelas').trim();
+      return bacaMedan(item, ['Kelas', 'kelas', 'Nama_Kelas', 'Nama Kelas']) || 'Tiada Kelas';
     }
 
     function bacaNama(item) {
-      return String(item.Nama || item.nama || item['Nama Murid'] || '').trim();
+      return bacaMedan(item, ['Nama', 'nama', 'Nama Murid']);
     }
 
     function bacaTarikh(item) {
-      const raw = String(item.Tarikh || item.tarikh || '').trim();
+      const raw = bacaMedan(item, ['Tarikh', 'tarikh', 'Tarikh Kehadiran', 'tarikh kehadiran']);
       if (!raw) return '';
-      const iso = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-      if (iso) return `${iso[3]}/${iso[2]}/${iso[1]}`;
-      return raw;
+      return normalTarikh(raw);
+    }
+
+    function normalTarikh(raw) {
+      const text = String(raw || '').trim();
+      if (!text) return '';
+
+      const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+      if (iso) return `${pad2(iso[3])}/${pad2(iso[2])}/${iso[1]}`;
+
+      const dmy = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (dmy) return `${pad2(dmy[1])}/${pad2(dmy[2])}/${dmy[3]}`;
+
+      return text;
+    }
+
+    function adaMedanRekodTerus(item) {
+      return Boolean(
+        bacaTarikh(item)
+        || bacaStatusMentah(item)
+        || bacaMedan(item, ['Masa', 'masa', 'Masa Kehadiran', 'masa kehadiran'])
+      );
+    }
+
+    function tukarBarisSheetKeRekod(item, kelasHint = '') {
+      if (!item || typeof item !== 'object') return [];
+      const kelasAsas = bacaKelas(item) !== 'Tiada Kelas' ? bacaKelas(item) : String(kelasHint || '').trim();
+      if (adaMedanRekodTerus(item)) {
+        return [{
+          ...item,
+          ...(kelasAsas ? { Kelas: kelasAsas } : {})
+        }];
+      }
+
+      const nama = bacaNama(item);
+      const kelas = kelasAsas || bacaKelas(item);
+      if (!nama && !kelas) return [];
+
+      const rows = [];
+      for (const [key, value] of Object.entries(item)) {
+        const tarikh = normalTarikh(key);
+        const status = String(value || '').trim();
+        if (!tarikh || !status) continue;
+        if (!/^\d{2}\/\d{2}\/\d{4}$/.test(tarikh)) continue;
+
+        rows.push({
+          Nama: nama || '-',
+          Kelas: kelas,
+          Tarikh: tarikh,
+          Status: status
+        });
+      }
+
+      return rows;
     }
 
     function simpanCache(rows) {
@@ -974,10 +1101,59 @@
       } catch (_) { return null; }
     }
 
+    function tukarPayloadKeRekod(payload, kelasHint = '') {
+      if (Array.isArray(payload)) {
+        return payload.flatMap(item => tukarPayloadKeRekod(item, kelasHint));
+      }
+
+      if (!payload || typeof payload !== 'object') return [];
+
+      if (adaMedanRekodTerus(payload) || bacaNama(payload)) {
+        return tukarBarisSheetKeRekod(payload, kelasHint);
+      }
+
+      return Object.entries(payload).flatMap(([key, value]) => {
+        const hint = String(key || '').trim();
+        return tukarPayloadKeRekod(value, hint);
+      });
+    }
+
     function dapatkanRowsApi(payload) {
-      if (Array.isArray(payload)) return payload;
-      if (payload && Array.isArray(payload.data)) return payload.data;
+      if (Array.isArray(payload)) return tukarPayloadKeRekod(payload);
+      if (payload && Array.isArray(payload.data)) return tukarPayloadKeRekod(payload.data);
+      if (payload && typeof payload === 'object') return tukarPayloadKeRekod(payload);
       return [];
+    }
+
+    function nampakMacamJson(text) {
+      const trimmed = String(text || '').trim();
+      return trimmed.startsWith('{') || trimmed.startsWith('[');
+    }
+
+    function responsPerluLogin(text) {
+      const html = String(text || '').toLowerCase();
+      return html.includes('sign in - google accounts')
+        || html.includes('accountchooser')
+        || html.includes('google accounts');
+    }
+
+    async function bacaPayloadApi(res) {
+      const text = await res.text();
+      const type = (res.headers.get('content-type') || '').toLowerCase();
+
+      if (responsPerluLogin(text)) {
+        throw new Error('Apps Script masih perlukan login Google. Guna pautan deploy Web App yang boleh diakses awam atau benarkan akses domain yang betul.');
+      }
+
+      if (!type.includes('application/json') && !nampakMacamJson(text)) {
+        throw new Error('Respons API bukan JSON');
+      }
+
+      try {
+        return JSON.parse(text);
+      } catch (_) {
+        throw new Error('JSON API tidak sah');
+      }
     }
 
     function isiPilihanKelas() {
@@ -1035,7 +1211,7 @@
       const tarikhApi = formatTarikhApi(el.filterTarikh.value);
 
       return dataPenuh.filter(item => {
-        const nama = String(item.Nama || item.nama || '').toLowerCase();
+        const nama = bacaNama(item).toLowerCase();
         const kelasItem = bacaKelas(item);
         const tarikhItem = bacaTarikh(item);
 
@@ -1047,9 +1223,7 @@
     }
 
     function rowsDitapis() {
-      const rows = rowsDitapisAsas();
-      if (rows.length && !adaImbasanKad(rows)) return [];
-      return rows;
+      return rowsDitapisAsas();
     }
 
     function sortRows(rows) {
@@ -1064,7 +1238,7 @@
 
     function kiraStat(rows) {
       const jumlah = rows.length;
-      const hadir = rows.filter(r => normalStatus(r.Status || r.status) === 'Hadir').length;
+      const hadir = rows.filter(r => normalStatus(bacaStatusMentah(r)) === 'Hadir').length;
       const tidak = jumlah - hadir;
       const peratus = jumlah ? ((hadir / jumlah) * 100).toFixed(1) : '0.0';
       return { jumlah, hadir, tidak, peratus };
@@ -1083,18 +1257,14 @@
       el.rowCount.textContent = `${sorted.length} rekod`;
 
       if (!sorted.length) {
-        const rowsAsas = rowsDitapisAsas();
-        const mesej = (rowsAsas.length && !adaImbasanKad(rowsAsas))
-          ? 'Tiada imbasan'
-          : 'Tiada data untuk penapis semasa.';
-        el.tableBody.innerHTML = `<tr><td colspan="3" class="empty">${mesej}</td></tr>`;
+        el.tableBody.innerHTML = '<tr><td colspan="3" class="empty">Tiada data untuk penapis semasa.</td></tr>';
         return;
       }
 
       el.tableBody.innerHTML = sorted.map(item => {
-        const nama = String(item.Nama || item.nama || '-');
+        const nama = bacaNama(item) || '-';
         const kelas = bacaKelas(item);
-        const status = normalStatus(item.Status || item.status || '');
+        const status = normalStatus(bacaStatusMentah(item));
         return `<tr>
           <td>${nama}</td>
           <td>${kelas}</td>
@@ -1110,7 +1280,7 @@
       const byKelas = new Map();
       rows.forEach(item => {
         const kelas = bacaKelas(item);
-        const status = normalStatus(item.Status || item.status || '');
+        const status = normalStatus(bacaStatusMentah(item));
         if (!byKelas.has(kelas)) byKelas.set(kelas, { total: 0, hadir: 0 });
         const r = byKelas.get(kelas);
         r.total += 1;
@@ -1272,10 +1442,10 @@
           doc.addPage();
           y = 42;
         }
-        const nama = String(item.Nama || item.nama || '-').slice(0, 40);
+        const nama = (bacaNama(item) || '-').slice(0, 40);
         const kelasRow = bacaKelas(item).slice(0, 10);
-        const status = normalStatus(item.Status || item.status || '');
-        const masa = String(item.Masa || item.masa || '-').slice(0, 12);
+        const status = normalStatus(bacaStatusMentah(item));
+        const masa = bacaMedan(item, ['Masa', 'masa', 'Masa Kehadiran', 'masa kehadiran']).slice(0, 12) || '-';
 
         doc.text(String(idx + 1), x, y);
         doc.text(nama, x + 30, y);
@@ -1289,19 +1459,36 @@
     }
 
     async function ambilData() {
-      try {
-        const tarikhApi = formatTarikhApi(el.filterTarikh.value || hariIniIso());
-        const sep = SCRIPT_URL.includes('?') ? '&' : '?';
-        const url = `${SCRIPT_URL}${sep}tarikh=${encodeURIComponent(tarikhApi)}`;
+      const tarikhIso = el.filterTarikh.value || hariIniIso();
+      const tarikhApi = formatTarikhApi(tarikhIso);
+      const sep = SCRIPT_URL.includes('?') ? '&' : '?';
+      const url = `${SCRIPT_URL}${sep}tarikh=${encodeURIComponent(tarikhApi)}`;
 
+      setDebugInfo({
+        tarikhIso,
+        tarikhApi,
+        url,
+        status: 'Memanggil Apps Script...'
+      });
+
+      try {
         const res = await fetch(url, { cache: 'no-cache', redirect: 'follow' });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-        const type = (res.headers.get('content-type') || '').toLowerCase();
-        if (!type.includes('application/json')) throw new Error('Respons bukan JSON');
-
-        const payload = await res.json();
+        const payload = await bacaPayloadApi(res);
+        if (payload && payload.success === false) {
+          throw new Error(payload.message || 'Apps Script memulangkan ralat.');
+        }
         dataPenuh = dapatkanRowsApi(payload);
+
+        setDebugInfo({
+          tarikhIso,
+          tarikhApi,
+          url,
+          status: 'Berjaya ambil data',
+          http: res.status,
+          rows: Array.isArray(dataPenuh) ? dataPenuh.length : 0,
+          error: Array.isArray(dataPenuh) && dataPenuh.length === 0 ? 'Tiada rekod dipulangkan oleh Apps Script untuk tarikh ini.' : '-'
+        });
 
         if (!Array.isArray(payload) && !Array.isArray(payload?.data)) {
           toast('Format API tidak serasi dengan paparan murid.', 'warn');
@@ -1313,6 +1500,13 @@
         setNetworkUI(true);
         el.metaData.textContent = `Data dikemaskini: ${new Date().toLocaleTimeString('ms-MY')} | Tarikh: ${tarikhApi}`;
       } catch (err) {
+        setDebugInfo({
+          tarikhIso,
+          tarikhApi,
+          url,
+          status: 'Gagal ambil data',
+          error: err.message || 'Tidak diketahui'
+        });
         setNetworkUI(navigator.onLine);
         const c = bacaCache();
         if (c) {
